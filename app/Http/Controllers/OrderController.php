@@ -79,17 +79,16 @@ class OrderController extends Controller
 
 public function store(Request $request)
 {
-    // Validate request
     $data = $request->validate([
         'hold_id' => ['required', 'exists:holds,id'],
     ]);
 
     $order = null;
     $errorMessage = null;
-    
+
     DB::transaction(function () use (&$order, &$errorMessage, $data) {
 
-        // Lock hold row
+        // Lock hold
         $hold = Hold::whereKey($data['hold_id'])
             ->lockForUpdate()
             ->first();
@@ -99,10 +98,8 @@ public function store(Request $request)
             return;
         }
 
-        // Hold expired or invalid
         if ($hold->status !== 'active' || $hold->expires_at->isPast()) {
 
-            // if it just expired, release reserved stock
             if ($hold->status === 'active' && $hold->expires_at->isPast()) {
 
                 $product = Product::whereKey($hold->product_id)
@@ -123,13 +120,11 @@ public function store(Request $request)
             return;
         }
 
-        // Hold already used
         if (!is_null($hold->order_id)) {
             $errorMessage = "Hold already used for an order.";
             return;
         }
 
-        // Lock product
         $product = Product::whereKey($hold->product_id)
             ->lockForUpdate()
             ->first();
@@ -150,19 +145,42 @@ public function store(Request $request)
             'status'     => 'pending_payment',
         ]);
 
-        // Update hold (used)
+        // Update hold
         $hold->status = 'used';
         $hold->order_id = $order->id;
         $hold->save();
 
+        // ----------------------------------------------------
+        // 🔥 APPLY WEBHOOKS THAT ARRIVED BEFORE ORDER CREATION
+        // ----------------------------------------------------
+
+        $payment = \App\Models\Payment::where('order_id', $order->id)->first();
+
+        if ($payment && $payment->status === 'success') {
+
+            $order->status = 'paid';
+            $order->save();
+
+            $product->reserved_stock -= $order->qty;
+            if ($product->reserved_stock < 0) {
+                $product->reserved_stock = 0;
+            }
+
+            $product->sold_stock += $order->qty;
+            $product->save();
+
+            $hold->status = 'used';
+            $hold->save();
+
+            Cache::forget("product:{$product->id}");
+        }
+
     }, 3);
 
-    // Return any error
     if ($errorMessage !== null) {
         return response()->json(['error' => $errorMessage], 422);
     }
 
-    // Success
     return response()->json([
         'order_id' => $order->id,
         'status'   => $order->status,
@@ -170,6 +188,7 @@ public function store(Request $request)
         'amount'   => $order->amount,
     ], 201);
 }
+
 
 
 

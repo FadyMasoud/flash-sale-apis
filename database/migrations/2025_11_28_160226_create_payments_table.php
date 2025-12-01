@@ -9,17 +9,21 @@ return new class extends Migration
     /**
      * Run the migrations.
      */
-    public function up(): void
-    {
-        Schema::create('payments', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('order_id')->constrained()->cascadeOnDelete();
-            $table->string('idempotency_key')->unique();
-            $table->enum('status', ['success', 'failed']);
-            $table->json('payload')->nullable();
-            $table->timestamps();
-        });
-    }
+public function up()
+{
+    Schema::create('payments', function (Blueprint $table) {
+        $table->id();
+
+        // Order MAY not exist yet when webhook arrives
+        $table->unsignedBigInteger('order_id')->nullable();
+
+        $table->string('idempotency_key')->unique();
+        $table->enum('status', ['success', 'failed']);
+        $table->json('payload')->nullable();
+
+        $table->timestamps();
+    });
+}
 
     public function down(): void
     {
